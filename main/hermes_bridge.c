@@ -13,6 +13,7 @@
 
 #include "hermes_bridge.h"
 #include "hermes_wifi_prov.h"
+#include "hermes_ws_client.h"
 #include "demo.h"
 #include "bsp_audio.h"
 #include "bsp_display.h"
@@ -708,6 +709,62 @@ void hermes_bridge_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     }
 }
 
+// ── WebSocket Message Callback ─────────────────────────────────────────────
+
+static void on_ws_message(const char *data, size_t len) {
+    ESP_LOGI(TAG, "WebSocket message: %.*s", len, data);
+
+    // Parse JSON message
+    // TODO: Use proper JSON parser (cJSON)
+    // For now, simple string matching
+
+    if (strstr(data, "\"type\":\"stream_chunk\"")) {
+        // Extract content field
+        const char *content_start = strstr(data, "\"content\":\"");
+        if (content_start) {
+            content_start += 11; // Skip "content":"
+            const char *content_end = strchr(content_start, '"');
+            if (content_end) {
+                size_t content_len = content_end - content_start;
+                char content[256] = {0};
+                if (content_len < sizeof(content)) {
+                    memcpy(content, content_start, content_len);
+                    content[content_len] = '\0';
+                    // Add to chat messages
+                    add_message(content, false, false);
+                    // Rebuild UI
+                    if (s_state == STATE_CHAT_INPUT || s_state == STATE_CHAT_SCROLL) {
+                        if (bsp_lvgl_lock(500)) {
+                            rebuild_chat_ui();
+                            bsp_lvgl_unlock();
+                        }
+                    }
+                }
+            }
+        }
+    } else if (strstr(data, "\"type\":\"stream_end\"")) {
+        ESP_LOGI(TAG, "Stream ended");
+    } else if (strstr(data, "\"type\":\"stt_result\"")) {
+        // Extract text field
+        const char *text_start = strstr(data, "\"text\":\"");
+        if (text_start) {
+            text_start += 8; // Skip "text":"
+            const char *text_end = strchr(text_start, '"');
+            if (text_end) {
+                size_t text_len = text_end - text_start;
+                char text[256] = {0};
+                if (text_len < sizeof(text)) {
+                    memcpy(text, text_start, text_len);
+                    text[text_len] = '\0';
+                    ESP_LOGI(TAG, "STT result: %s", text);
+                    // Send recognized text to bot
+                    send_chat_message(s_bots[s_bot_selected].id, text);
+                }
+            }
+        }
+    }
+}
+
 // ── WiFi Provisioning Callbacks ────────────────────────────────────────────
 
 static void on_wifi_connected(const char *ip_addr) {
@@ -717,6 +774,11 @@ static void on_wifi_connected(const char *ip_addr) {
     // TODO: Allow user to configure via BLUFI custom data or NVS
     strncpy(s_server_ip, "192.168.1.100", sizeof(s_server_ip) - 1);
     s_server_port = SERVER_PORT;
+
+    // Initialize WebSocket client
+    hermes_ws_init(s_server_ip, s_server_port);
+    hermes_ws_set_callback(on_ws_message);
+    hermes_ws_connect();
 
     // Start HTTP task now that WiFi is connected
     if (!s_http_task) {
@@ -782,6 +844,9 @@ void hermes_bridge_enter(void) {
 
 void hermes_bridge_exit(void) {
     ESP_LOGI(TAG, "Hermes Bridge exiting");
+
+    // Disconnect WebSocket
+    hermes_ws_disconnect();
 
     // Stop tasks
     s_recording = false;
