@@ -12,6 +12,7 @@
 //   5. Error          - Connection lost, retry
 
 #include "hermes_bridge.h"
+#include "hermes_wifi_prov.h"
 #include "demo.h"
 #include "bsp_audio.h"
 #include "bsp_display.h"
@@ -707,6 +708,29 @@ void hermes_bridge_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     }
 }
 
+// ── WiFi Provisioning Callbacks ────────────────────────────────────────────
+
+static void on_wifi_connected(const char *ip_addr) {
+    ESP_LOGI(TAG, "WiFi connected with IP: %s", ip_addr);
+
+    // For now, use hardcoded server IP
+    // TODO: Allow user to configure via BLUFI custom data or NVS
+    strncpy(s_server_ip, "192.168.1.100", sizeof(s_server_ip) - 1);
+    s_server_port = SERVER_PORT;
+
+    // Start HTTP task now that WiFi is connected
+    if (!s_http_task) {
+        xTaskCreate(http_task_func, "hermes_http", HTTP_TASK_STACK, NULL, 4, &s_http_task);
+    }
+
+    set_state(STATE_CONNECTING);
+}
+
+static void on_wifi_failed(esp_err_t err) {
+    ESP_LOGE(TAG, "WiFi connection failed: %s", esp_err_to_name(err));
+    set_state(STATE_ERROR);
+}
+
 // ── Page Lifecycle ─────────────────────────────────────────────────────────
 
 void hermes_bridge_enter(void) {
@@ -742,10 +766,17 @@ void hermes_bridge_enter(void) {
     rebuild_ui();
     lv_screen_load(s_scr);
 
-    // Start HTTP task
-    xTaskCreate(http_task_func, "hermes_http", HTTP_TASK_STACK, NULL, 4, &s_http_task);
+    // Start WiFi provisioning via BLUFI
+    esp_err_t err = hermes_wifi_prov_start(on_wifi_connected, on_wifi_failed);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi provisioning failed: %s", esp_err_to_name(err));
+        set_state(STATE_ERROR);
+        return;
+    }
 
-    // Start audio task
+    set_hint("Use ESP Config app to setup WiFi");
+
+    // Start audio task (HTTP task starts after WiFi connects)
     xTaskCreate(audio_task_func, "hermes_audio", AUDIO_TASK_STACK, NULL, 5, &s_audio_task);
 }
 
