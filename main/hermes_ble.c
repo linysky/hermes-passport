@@ -8,6 +8,7 @@
 #include "nvs.h"
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
+#include "host/util/util.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "services/gap/ble_svc_gap.h"
@@ -20,25 +21,26 @@ static const char *TAG = "hermes_ble";
 
 // ── UUID Definitions ───────────────────────────────────────────────────────
 
-// Service UUID: HERMES-0001-51C4-499D-A186-4621A4938301
+// Service UUID: 48450001-51c4-499d-a186-4621a4938301
+// BLE_UUID128_INIT uses reversed byte order
 static const ble_uuid128_t hermes_service_uuid =
-    BLE_UUID128_INIT(0x01, 0x83, 0x93, 0xA4, 0x21, 0x46, 0x86, 0xA1,
-                     0xD5, 0x49, 0xC4, 0x51, 0x01, 0x00, 0x45, 0x48);
+    BLE_UUID128_INIT(0x01, 0x83, 0x93, 0xa4, 0x21, 0x46, 0x86, 0xa1,
+                     0x9d, 0x49, 0xc4, 0x51, 0x01, 0x00, 0x45, 0x48);
 
-// RX characteristic UUID (write): ...8302
+// RX characteristic UUID: 48450002-51c4-499d-a186-4621a4938301
 static const ble_uuid128_t hermes_rx_uuid =
-    BLE_UUID128_INIT(0x02, 0x83, 0x93, 0xA4, 0x21, 0x46, 0x86, 0xA1,
-                     0xD5, 0x49, 0xC4, 0x51, 0x01, 0x00, 0x45, 0x48);
+    BLE_UUID128_INIT(0x02, 0x83, 0x93, 0xa4, 0x21, 0x46, 0x86, 0xa1,
+                     0x9d, 0x49, 0xc4, 0x51, 0x01, 0x00, 0x45, 0x48);
 
-// TX characteristic UUID (notify): ...8303
+// TX characteristic UUID: 48450003-51c4-499d-a186-4621a4938301
 static const ble_uuid128_t hermes_tx_uuid =
-    BLE_UUID128_INIT(0x03, 0x83, 0x93, 0xA4, 0x21, 0x46, 0x86, 0xA1,
-                     0xD5, 0x49, 0xC4, 0x51, 0x01, 0x00, 0x45, 0x48);
+    BLE_UUID128_INIT(0x03, 0x83, 0x93, 0xa4, 0x21, 0x46, 0x86, 0xa1,
+                     0x9d, 0x49, 0xc4, 0x51, 0x01, 0x00, 0x45, 0x48);
 
-// VOICE characteristic UUID (write): ...8304
+// VOICE characteristic UUID: 48450004-51c4-499d-a186-4621a4938301
 static const ble_uuid128_t hermes_voice_uuid =
-    BLE_UUID128_INIT(0x04, 0x83, 0x93, 0xA4, 0x21, 0x46, 0x86, 0xA1,
-                     0xD5, 0x49, 0xC4, 0x51, 0x01, 0x00, 0x45, 0x48);
+    BLE_UUID128_INIT(0x04, 0x83, 0x93, 0xa4, 0x21, 0x46, 0x86, 0xa1,
+                     0x9d, 0x49, 0xc4, 0x51, 0x01, 0x00, 0x45, 0x48);
 
 // ── Message Types ──────────────────────────────────────────────────────────
 
@@ -196,29 +198,60 @@ static void ble_on_sync(void)
 {
     ESP_LOGI(TAG, "BLE synced");
 
-    // Start advertising
-    const char *name = "Hermes-Passport";
-    ble_svc_gap_device_name_set(name);
+    // Ensure address
+    int rc = ble_hs_util_ensure_addr(0);
+    if (rc) {
+        ESP_LOGE(TAG, "ble_hs_util_ensure_addr failed: %d", rc);
+        return;
+    }
 
+    // Infer address type
+    uint8_t addr_type;
+    rc = ble_hs_id_infer_auto(0, &addr_type);
+    if (rc) {
+        ESP_LOGE(TAG, "ble_hs_id_infer_auto failed: %d", rc);
+        return;
+    }
+
+    // Set device name
+    ble_svc_gap_device_name_set("Hermes-Passport");
+
+    // Advertising data: flags + service UUID
     struct ble_hs_adv_fields adv_fields = {0};
     adv_fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    adv_fields.name = (uint8_t *)name;
-    adv_fields.name_len = strlen(name);
-    adv_fields.name_is_complete = 1;
-    adv_fields.uuids128 = &hermes_service_uuid;
+    adv_fields.uuids128 = (ble_uuid128_t *)&hermes_service_uuid;
     adv_fields.num_uuids128 = 1;
     adv_fields.uuids128_is_complete = 1;
+    rc = ble_gap_adv_set_fields(&adv_fields);
+    if (rc) {
+        ESP_LOGE(TAG, "ble_gap_adv_set_fields failed: %d", rc);
+        return;
+    }
 
-    ble_gap_adv_set_fields(&adv_fields);
+    // Scan response data: device name
+    struct ble_hs_adv_fields scan_rsp = {0};
+    scan_rsp.name = (const uint8_t *)"Hermes-Passport";
+    scan_rsp.name_len = 15;
+    scan_rsp.name_is_complete = 1;
+    rc = ble_gap_adv_rsp_set_fields(&scan_rsp);
+    if (rc) {
+        ESP_LOGE(TAG, "ble_gap_adv_rsp_set_fields failed: %d", rc);
+        return;
+    }
 
-    ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER,
-                      &(struct ble_gap_adv_params){
-                          .conn_mode = BLE_GAP_CONN_MODE_UND,
-                          .disc_mode = BLE_GAP_DISC_MODE_GEN,
-                      }, gap_event_handler, NULL);
+    // Start advertising
+    struct ble_gap_adv_params params = {
+        .conn_mode = BLE_GAP_CONN_MODE_UND,
+        .disc_mode = BLE_GAP_DISC_MODE_GEN,
+    };
+    rc = ble_gap_adv_start(addr_type, NULL, BLE_HS_FOREVER, &params, gap_event_handler, NULL);
+    if (rc) {
+        ESP_LOGE(TAG, "ble_gap_adv_start failed: %d", rc);
+        return;
+    }
 
     s_state = HERMES_BLE_ADVERTISING;
-    ESP_LOGI(TAG, "Advertising started as '%s', pairing code: %04d", name, s_pairing_code);
+    ESP_LOGI(TAG, "Advertising started, pairing code: %04d", s_pairing_code);
 }
 
 static void ble_host_task(void *param)
