@@ -251,12 +251,12 @@ static void rebuild_chat_ui(void) {
         } else if (msg->is_user) {
             lv_obj_set_style_bg_color(bubble, lv_color_hex(COLOR_USER_MSG), 0);
             lv_obj_set_style_border_width(bubble, 0, 0);
-            lv_obj_set_style_margin_left(bubble, 20);
+            lv_obj_set_style_margin_left(bubble, 20, 0);
             lv_obj_set_flex_align(bubble, LV_FLEX_ALIGN_END, 0, 0);
         } else {
             lv_obj_set_style_bg_color(bubble, lv_color_hex(COLOR_BOT_MSG), 0);
             lv_obj_set_style_border_width(bubble, 0, 0);
-            lv_obj_set_style_margin_right(bubble, 20);
+            lv_obj_set_style_margin_right(bubble, 20, 0);
         }
 
         lv_obj_t *text = lv_label_create(bubble);

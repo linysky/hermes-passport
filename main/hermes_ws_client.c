@@ -98,7 +98,7 @@ esp_err_t hermes_ws_connect(void)
     }
 
     // Register event handler
-    esp_err_t err = esp_websocket_register_events(s_client, WEWSOCKET_EVENT_ANY,
+    esp_err_t err = esp_websocket_register_events(s_client, WEBSOCKET_EVENT_ANY,
                                                     websocket_event_handler, NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register events: %s", esp_err_to_name(err));
