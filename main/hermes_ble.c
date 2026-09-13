@@ -130,19 +130,197 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
     { 0 },  // End
 };
 
+// ── Message Handling ────────────────────────────────────────────────────────
+
+static void handle_rx_message(const uint8_t *data, size_t len)
+{
+    if (len < 2) return;
+
+    uint8_t version = data[0];
+    uint8_t type = data[1];
+    const uint8_t *payload = data + 2;
+    size_t payload_len = len - 2;
+
+    if (version != 1) return;
+
+    switch (type) {
+    case MSG_TYPE_BOT_LIST: {
+        if (payload_len < 1) break;
+        uint8_t count = payload[0];
+        if (count > HERMES_BLE_MAX_BOTS) count = HERMES_BLE_MAX_BOTS;
+
+        hermes_ble_bot_t bots[HERMES_BLE_MAX_BOTS];
+        memset(bots, 0, sizeof(bots));
+
+        size_t offset = 1;
+        for (int i = 0; i < count && offset + 328 <= payload_len; i++) {
+            memcpy(bots[i].id, payload + offset, 40);
+            bots[i].id[40] = '\0';
+            memcpy(bots[i].name, payload + offset + 40, 80);
+            bots[i].name[80] = '\0';
+            memcpy(bots[i].status, payload + offset + 120, 16);
+            bots[i].status[16] = '\0';
+            memcpy(bots[i].description, payload + offset + 136, 192);
+            bots[i].description[192] = '\0';
+            offset += 328;
+            ESP_LOGI(TAG, "Bot[%d]: %s %s", i, bots[i].id, bots[i].name);
+        }
+
+        if (s_on_bots) s_on_bots(bots, count);
+        break;
+    }
+
+    case MSG_TYPE_STREAM_CHUNK: {
+        if (payload_len < 38) break;
+        char request_id[37] = {0};
+        memcpy(request_id, payload, 36);
+        uint16_t content_len = payload[36] | (payload[37] << 8);
+        if (payload_len < 38 + content_len) break;
+        char content[512] = {0};
+        if (content_len < sizeof(content)) {
+            memcpy(content, payload + 38, content_len);
+        }
+        if (s_on_stream_chunk) s_on_stream_chunk(request_id, content);
+        break;
+    }
+
+    case MSG_TYPE_STREAM_END: {
+        if (payload_len < 36) break;
+        char request_id[37] = {0};
+        memcpy(request_id, payload, 36);
+        if (s_on_stream_end) s_on_stream_end(request_id);
+        break;
+    }
+
+    case MSG_TYPE_STT_RESULT: {
+        if (payload_len < 38) break;
+        char request_id[37] = {0};
+        memcpy(request_id, payload, 36);
+        uint16_t text_len = payload[36] | (payload[37] << 8);
+        if (payload_len < 38 + text_len) break;
+        char text[512] = {0};
+        if (text_len < sizeof(text)) {
+            memcpy(text, payload + 38, text_len);
+        }
+        if (s_on_stt_result) s_on_stt_result(request_id, text);
+        break;
+    }
+
+    case MSG_TYPE_STT_ERROR: {
+        if (payload_len < 38) break;
+        char request_id[37] = {0};
+        memcpy(request_id, payload, 36);
+        uint16_t error_len = payload[36] | (payload[37] << 8);
+        if (payload_len < 38 + error_len) break;
+        char error[256] = {0};
+        if (error_len < sizeof(error)) {
+            memcpy(error, payload + 38, error_len);
+        }
+        if (s_on_stt_error) s_on_stt_error(request_id, error);
+        break;
+    }
+
+    case MSG_TYPE_HEARTBEAT: {
+        // Respond with ack
+        uint8_t ack[6] = {1, MSG_TYPE_HEARTBEAT_ACK};
+        if (payload_len >= 4) memcpy(ack + 2, payload, 4);
+        // Send via TX notification
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(ack, 6);
+        if (om && s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+            ble_gattc_notify_custom(s_conn_handle, s_tx_val_handle, om);
+        }
+        break;
+    }
+
+    default:
+        ESP_LOGW(TAG, "Unknown msg type: 0x%02x", type);
+        break;
+    }
+}
+
+static void handle_voice_data(const uint8_t *data, size_t len)
+{
+    if (len < 7) return;
+
+    uint8_t kind = data[0];
+    uint32_t token;
+    uint16_t sequence;
+    memcpy(&token, data + 1, 4);
+    memcpy(&sequence, data + 5, 2);
+    const uint8_t *payload = data + 7;
+    size_t payload_len = len - 7;
+
+    switch (kind) {
+    case VOICE_KIND_START:
+        if (payload_len >= 40) {
+            char bot_id[41] = {0};
+            memcpy(bot_id, payload, 40);
+            ESP_LOGI(TAG, "Voice start: bot=%s token=%lu", bot_id, (unsigned long)token);
+        }
+        break;
+
+    case VOICE_KIND_DATA:
+        ESP_LOGD(TAG, "Voice data: %d bytes, seq=%d", (int)payload_len, sequence);
+        // TODO: Buffer audio data for STT
+        break;
+
+    case VOICE_KIND_END:
+        ESP_LOGI(TAG, "Voice end: token=%lu", (unsigned long)token);
+        // TODO: Process buffered audio → STT
+        break;
+
+    case VOICE_KIND_CANCEL:
+        ESP_LOGI(TAG, "Voice cancel: token=%lu", (unsigned long)token);
+        // TODO: Discard buffered audio
+        break;
+    }
+}
+
+// ── Message Reassembly Buffer ───────────────────────────────────────────────
+
+#define REASSEMBLY_BUF_SIZE 2048
+static uint8_t s_reassembly_buf[REASSEMBLY_BUF_SIZE];
+static size_t s_reassembly_len = 0;
+static uint32_t s_last_write_time = 0;
+
 // ── GATT Access Callback ───────────────────────────────────────────────────
 
 static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                            struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        const uint8_t *data = ctxt->om->om_data;
+        size_t len = ctxt->om->om_len;
+
         if (attr_handle == s_rx_val_handle) {
-            // RX write from companion
-            const uint8_t *data = ctxt->om->om_data;
-            size_t len = ctxt->om->om_len;
-            // handle_rx_message(data, len);
+            // RX write from companion - reassemble chunks
+            uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+
+            // If gap > 100ms, start new message
+            if (now - s_last_write_time > 100 || s_reassembly_len == 0) {
+                s_reassembly_len = 0;
+            }
+            s_last_write_time = now;
+
+            // Append chunk
+            if (s_reassembly_len + len <= REASSEMBLY_BUF_SIZE) {
+                memcpy(s_reassembly_buf + s_reassembly_len, data, len);
+                s_reassembly_len += len;
+            } else {
+                ESP_LOGW(TAG, "Reassembly overflow, dropping");
+                s_reassembly_len = 0;
+                return 0;
+            }
+
+            // Check if message is complete (first 2 bytes = version + type)
+            // For now, process immediately on any write
+            if (s_reassembly_len >= 2) {
+                handle_rx_message(s_reassembly_buf, s_reassembly_len);
+                s_reassembly_len = 0;
+            }
         } else if (attr_handle == s_voice_val_handle) {
-            // Voice data from companion (should not happen, device sends voice)
+            // Voice data from companion
+            handle_voice_data(data, len);
         }
     }
     return 0;
