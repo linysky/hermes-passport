@@ -103,19 +103,19 @@ static const struct ble_gatt_chr_def gatt_chars[] = {
     {
         .uuid = &hermes_rx_uuid.u,
         .access_cb = gatt_access_cb,
-        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_AUTHEN,
+        .flags = BLE_GATT_CHR_F_WRITE,
         .val_handle = &s_rx_val_handle,
     },
     {
         .uuid = &hermes_tx_uuid.u,
         .access_cb = gatt_access_cb,
-        .flags = BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_READ_AUTHEN,
+        .flags = BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_READ,
         .val_handle = &s_tx_val_handle,
     },
     {
         .uuid = &hermes_voice_uuid.u,
         .access_cb = gatt_access_cb,
-        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_AUTHEN,
+        .flags = BLE_GATT_CHR_F_WRITE,
         .val_handle = &s_voice_val_handle,
     },
     { 0 },  // End
@@ -276,9 +276,9 @@ esp_err_t hermes_ble_init(void)
     // Set callbacks
     ble_hs_cfg.reset_cb = ble_on_reset;
     ble_hs_cfg.sync_cb = ble_on_sync;
-    ble_hs_cfg.sm_sc = 1;
-    ble_hs_cfg.sm_mitm = 1;
-    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_sc = 0;
+    ble_hs_cfg.sm_mitm = 0;
+    ble_hs_cfg.sm_bonding = 0;
 
     // Initialize GATT services
     ble_svc_gap_init();
