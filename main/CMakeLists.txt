@@ -11,8 +11,7 @@ idf_component_register(
          "demo_ble.c"
          "demo_low_power.c"
          "hermes_bridge.c"
-         "hermes_wifi_prov.c"
-         "hermes_ws_client.c"
+         "hermes_ble.c"
     INCLUDE_DIRS "."
-    REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash esp_http_client
+    REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
 )
