@@ -6,6 +6,8 @@
 #include "esp_random.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/timers.h"
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
 #include "host/util/util.h"
@@ -149,24 +151,24 @@ static void handle_rx_message(const uint8_t *data, size_t len)
         uint8_t count = payload[0];
         if (count > HERMES_BLE_MAX_BOTS) count = HERMES_BLE_MAX_BOTS;
 
-        hermes_ble_bot_t bots[HERMES_BLE_MAX_BOTS];
-        memset(bots, 0, sizeof(bots));
+        static hermes_ble_bot_t s_bots_rx[HERMES_BLE_MAX_BOTS];
+        memset(s_bots_rx, 0, sizeof(s_bots_rx));
 
         size_t offset = 1;
         for (int i = 0; i < count && offset + 328 <= payload_len; i++) {
-            memcpy(bots[i].id, payload + offset, 40);
-            bots[i].id[40] = '\0';
-            memcpy(bots[i].name, payload + offset + 40, 80);
-            bots[i].name[80] = '\0';
-            memcpy(bots[i].status, payload + offset + 120, 16);
-            bots[i].status[16] = '\0';
-            memcpy(bots[i].description, payload + offset + 136, 192);
-            bots[i].description[192] = '\0';
+            memcpy(s_bots_rx[i].id, payload + offset, 40);
+            s_bots_rx[i].id[40] = '\0';
+            memcpy(s_bots_rx[i].name, payload + offset + 40, 80);
+            s_bots_rx[i].name[80] = '\0';
+            memcpy(s_bots_rx[i].status, payload + offset + 120, 16);
+            s_bots_rx[i].status[16] = '\0';
+            memcpy(s_bots_rx[i].description, payload + offset + 136, 192);
+            s_bots_rx[i].description[192] = '\0';
             offset += 328;
-            ESP_LOGI(TAG, "Bot[%d]: %s %s", i, bots[i].id, bots[i].name);
+            ESP_LOGI(TAG, "Bot[%d]: %s %s", i, s_bots_rx[i].id, s_bots_rx[i].name);
         }
 
-        if (s_on_bots) s_on_bots(bots, count);
+        if (s_on_bots) s_on_bots(s_bots_rx, count);
         break;
     }
 
@@ -176,7 +178,7 @@ static void handle_rx_message(const uint8_t *data, size_t len)
         memcpy(request_id, payload, 36);
         uint16_t content_len = payload[36] | (payload[37] << 8);
         if (payload_len < 38 + content_len) break;
-        char content[512] = {0};
+        static char content[512]; memset(content, 0, sizeof(content));
         if (content_len < sizeof(content)) {
             memcpy(content, payload + 38, content_len);
         }
@@ -198,7 +200,7 @@ static void handle_rx_message(const uint8_t *data, size_t len)
         memcpy(request_id, payload, 36);
         uint16_t text_len = payload[36] | (payload[37] << 8);
         if (payload_len < 38 + text_len) break;
-        char text[512] = {0};
+        static char text[512]; memset(text, 0, sizeof(text));
         if (text_len < sizeof(text)) {
             memcpy(text, payload + 38, text_len);
         }
@@ -212,7 +214,7 @@ static void handle_rx_message(const uint8_t *data, size_t len)
         memcpy(request_id, payload, 36);
         uint16_t error_len = payload[36] | (payload[37] << 8);
         if (payload_len < 38 + error_len) break;
-        char error[256] = {0};
+        static char error[256]; memset(error, 0, sizeof(error));
         if (error_len < sizeof(error)) {
             memcpy(error, payload + 38, error_len);
         }
@@ -279,9 +281,22 @@ static void handle_voice_data(const uint8_t *data, size_t len)
 // ── Message Reassembly Buffer ───────────────────────────────────────────────
 
 #define REASSEMBLY_BUF_SIZE 2048
+#define REASSEMBLY_TIMEOUT_MS 200
 static uint8_t s_reassembly_buf[REASSEMBLY_BUF_SIZE];
 static size_t s_reassembly_len = 0;
 static uint32_t s_last_write_time = 0;
+static TimerHandle_t s_reassembly_timer = NULL;
+
+static void reassembly_timer_cb(TimerHandle_t timer) {
+    if (s_reassembly_len > 0) {
+        uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        if (now - s_last_write_time >= REASSEMBLY_TIMEOUT_MS) {
+            ESP_LOGI(TAG, "Reassembly timeout: %d bytes", (int)s_reassembly_len);
+            handle_rx_message(s_reassembly_buf, s_reassembly_len);
+            s_reassembly_len = 0;
+        }
+    }
+}
 
 // ── GATT Access Callback ───────────────────────────────────────────────────
 
@@ -296,8 +311,10 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
             // RX write from companion - reassemble chunks
             uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
 
-            // If gap > 100ms, start new message
-            if (now - s_last_write_time > 100 || s_reassembly_len == 0) {
+            // If gap > 100ms, process previous message first
+            if (now - s_last_write_time > 100 && s_reassembly_len > 0) {
+                ESP_LOGI(TAG, "Reassembly complete: %d bytes", (int)s_reassembly_len);
+                handle_rx_message(s_reassembly_buf, s_reassembly_len);
                 s_reassembly_len = 0;
             }
             s_last_write_time = now;
@@ -312,12 +329,9 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                 return 0;
             }
 
-            // Check if message is complete (first 2 bytes = version + type)
-            // For now, process immediately on any write
-            if (s_reassembly_len >= 2) {
-                handle_rx_message(s_reassembly_buf, s_reassembly_len);
-                s_reassembly_len = 0;
-            }
+            // Process message only after a gap (all chunks received)
+            // Don't process immediately - wait for next timeout or new message
+            ESP_LOGI(TAG, "RX chunk: %d bytes, total: %d", (int)len, (int)s_reassembly_len);
         } else if (attr_handle == s_voice_val_handle) {
             // Voice data from companion
             handle_voice_data(data, len);
@@ -466,6 +480,12 @@ esp_err_t hermes_ble_init(void)
 
     // Generate pairing code
     s_pairing_code = 1000 + (esp_random() % 9000);
+
+    // Create reassembly flush timer
+    s_reassembly_timer = xTimerCreate("reasm", pdMS_TO_TICKS(100), pdTRUE, NULL, reassembly_timer_cb);
+    if (s_reassembly_timer) {
+        xTimerStart(s_reassembly_timer, 0);
+    }
 
     ESP_LOGI(TAG, "BLE initialized");
     return ESP_OK;

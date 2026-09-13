@@ -248,38 +248,47 @@ static void rebuild_chat_ui(void) {
     lv_obj_set_style_pad_all(s_content_panel, 4, 0);
     lv_obj_set_flex_flow(s_content_panel, LV_FLEX_FLOW_COLUMN);
 
-    int start = (s_msg_count < MAX_MESSAGES) ? 0 :
-                (s_msg_head + 1) % MAX_MESSAGES;
-    int count = s_msg_count;
+    if (s_msg_count == 0) {
+        // Empty state
+        lv_obj_t *empty = lv_label_create(s_content_panel);
+        lv_label_set_text(empty, "No messages yet.\n\nOK: record voice\nUP: send 'continue'\nDOWN: send '/stop'");
+        lv_obj_set_style_text_color(empty, lv_color_hex(COLOR_TEXT_DIM), 0);
+        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_center(empty);
+    } else {
+        int start = (s_msg_count < MAX_MESSAGES) ? 0 :
+                    (s_msg_head + 1) % MAX_MESSAGES;
+        int count = s_msg_count;
 
-    for (int i = 0; i < count; i++) {
-        int idx = (start + i) % MAX_MESSAGES;
-        chat_message_t *msg = &s_messages[idx];
+        for (int i = 0; i < count; i++) {
+            int idx = (start + i) % MAX_MESSAGES;
+            chat_message_t *msg = &s_messages[idx];
 
-        lv_obj_t *bubble = lv_obj_create(s_content_panel);
-        lv_obj_set_width(bubble, 190);
-        lv_obj_set_style_radius(bubble, 4, 0);
-        lv_obj_set_style_pad_all(bubble, 4, 0);
+            lv_obj_t *bubble = lv_obj_create(s_content_panel);
+            lv_obj_set_width(bubble, 190);
+            lv_obj_set_style_radius(bubble, 4, 0);
+            lv_obj_set_style_pad_all(bubble, 4, 0);
 
-        if (msg->is_system) {
-            lv_obj_set_style_bg_opa(bubble, LV_OPA_TRANSP, 0);
-            lv_obj_set_style_border_width(bubble, 0, 0);
-        } else if (msg->is_user) {
-            lv_obj_set_style_bg_color(bubble, lv_color_hex(COLOR_USER_MSG), 0);
-            lv_obj_set_style_border_width(bubble, 0, 0);
-            lv_obj_set_style_margin_left(bubble, 20, 0);
-        } else {
-            lv_obj_set_style_bg_color(bubble, lv_color_hex(COLOR_BOT_MSG), 0);
-            lv_obj_set_style_border_width(bubble, 0, 0);
-            lv_obj_set_style_margin_right(bubble, 20, 0);
-        }
+            if (msg->is_system) {
+                lv_obj_set_style_bg_opa(bubble, LV_OPA_TRANSP, 0);
+                lv_obj_set_style_border_width(bubble, 0, 0);
+            } else if (msg->is_user) {
+                lv_obj_set_style_bg_color(bubble, lv_color_hex(COLOR_USER_MSG), 0);
+                lv_obj_set_style_border_width(bubble, 0, 0);
+                lv_obj_set_style_margin_left(bubble, 20, 0);
+            } else {
+                lv_obj_set_style_bg_color(bubble, lv_color_hex(COLOR_BOT_MSG), 0);
+                lv_obj_set_style_border_width(bubble, 0, 0);
+                lv_obj_set_style_margin_right(bubble, 20, 0);
+            }
 
-        lv_obj_t *text = lv_label_create(bubble);
-        lv_label_set_text(text, msg->text);
-        lv_label_set_long_mode(text, LV_LABEL_LONG_WRAP);
+            lv_obj_t *text = lv_label_create(bubble);
+            lv_label_set_text(text, msg->text);
+            lv_label_set_long_mode(text, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(text, 178);
         lv_obj_set_style_text_color(text, lv_color_hex(
             msg->is_system ? COLOR_TEXT_DIM : COLOR_TEXT), 0);
+        }
     }
 
     bsp_lvgl_unlock();
@@ -357,7 +366,7 @@ static void rebuild_ui(void) {
             break;
         case STATE_CHAT_INPUT:
             set_status(s_bots[s_bot_selected].name);
-            set_hint("UP:cont DOWN:stop OK:record");
+            set_hint("UP:cont DOWN:stop OK:rec | DN:back");
             rebuild_chat_ui();
             break;
         case STATE_CHAT_SCROLL:
@@ -499,7 +508,7 @@ void hermes_bridge_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 s_audio_stop = false;
                 hermes_ble_audio_start(s_bots[s_bot_selected].id);
                 set_state(STATE_RECORDING);
-            } else if (btn == BSP_BTN_OK && ev == BSP_BTN_LONG) {
+            } else if (btn == BSP_BTN_DOWN && ev == BSP_BTN_LONG) {
                 set_state(STATE_BOT_LIST);
             } else if (btn == BSP_BTN_UP && ev == BSP_BTN_LONG) {
                 set_state(STATE_CHAT_SCROLL);
@@ -538,7 +547,7 @@ void hermes_bridge_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 hermes_ble_send_text(s_bots[s_bot_selected].id, s_transcribe_text);
                 add_message(s_transcribe_text, true, false);
                 set_state(STATE_CHAT_INPUT);
-            } else if (btn == BSP_BTN_OK && ev == BSP_BTN_LONG) {
+            } else if (btn == BSP_BTN_DOWN && ev == BSP_BTN_LONG) {
                 // Cancel
                 set_state(STATE_CHAT_INPUT);
             }
