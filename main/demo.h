@@ -32,3 +32,6 @@ void demo_ble_key(bsp_btn_t btn, bsp_btn_ev_t ev);
 
 void demo_low_power_enter(void); void demo_low_power_exit(void);
 void demo_low_power_key(bsp_btn_t btn, bsp_btn_ev_t ev);
+
+void hermes_bridge_enter(void); void hermes_bridge_exit(void);
+void hermes_bridge_key(bsp_btn_t btn, bsp_btn_ev_t ev);

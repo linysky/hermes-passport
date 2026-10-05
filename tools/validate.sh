@@ -24,10 +24,30 @@ run_static_checks() {
     "${actionlint_bin}" -color .github/workflows/*.yml
 
     test_dir="$(mktemp -d /tmp/ai-passport-host-tests.XXXXXX)"
-    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
-        tests/test_ui_pixel_math.c main/ui_pixel_math.c \
-        -o "${test_dir}/test_ui_pixel_math"
-    "${test_dir}/test_ui_pixel_math"
+    # A native Windows compiler does not understand MSYS paths like /tmp/..., so hand
+    # it the C:/... form when cygpath is available (POSIX hosts pass the path through).
+    out_dir="${test_dir}"
+    if command -v cygpath >/dev/null 2>&1; then
+        out_dir="$(cygpath -m "${test_dir}")"
+    fi
+    # Pure-C modules and their host tests. Each entry is "test_source:module_sources".
+    host_tests=(
+        "tests/test_ui_pixel_math.c:main/ui_pixel_math.c"
+        "tests/test_text_layout.c:main/text_layout.c"
+        "tests/test_history_ring.c:main/history_ring.c main/text_layout.c"
+        "tests/test_buddy_state.c:main/buddy_state.c"
+        "tests/test_summary_extract.c:main/summary_extract.c main/text_layout.c"
+        "tests/test_adpcm.c:main/adpcm.c"
+    )
+    for entry in "${host_tests[@]}"; do
+        src="${entry%%:*}"
+        mods="${entry#*:}"
+        name="$(basename "${src}" .c)"
+        # shellcheck disable=SC2086  # ${mods} is intentionally word-split
+        "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain "${src}" ${mods} \
+            -o "${out_dir}/${name}"
+        "${out_dir}/${name}"
+    done
     python3 tests/test_verify_firmware.py
     rm -rf "${test_dir}"
     echo "Host tests: PASS"

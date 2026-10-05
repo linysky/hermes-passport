@@ -6,6 +6,8 @@
 
 ## Unreleased
 
+- 实现 BLE VOICE 音频上行管线：`audio_start` / `audio_frame` / `audio_end` / `audio_cancel` 现在把 PCM16LE 单声道 16 kHz 音频按 VOICE 帧（`kind:u8 | token:u32LE | sequence:u16LE | payload`，kind 为 开始/数据/结束/取消，token 为每次会话随机数，sequence 按块递增）流式发送给 Companion，运行时按协商的 ATT MTU 分块；VOICE 特征增加通知能力，录音任务现在边录边转发每个 40 ms PCM 块。V1 直接流式传输裸 PCM，Opus 压缩留作后续优化。同时修复录音到转写阶段的界面提示切换，并以中英双语 README 记录 BLE 架构与协议。
+
 - 加入厂家为优特利 520mAh 电芯生成的 80 字节 CW2017 profile，并实现内容与更新标志检查、写入后校验、规定的重启时序以及有上限的 SOC 就绪等待。
 
 - 扩充环境引导文档：新增乐鑫 Git 服务镜像（`git.espressif.com.cn`）作为中国大陆首选线路，覆盖 ESP-IDF v5.5.3 及其子模块；补充子模块长等待/超时处理、原地修复，以及 `esp32-wifi-lib` 等大仓的按钉死 commit 浅取；提示按仓库残留的 Jihulab `insteadOf` 旧配置；并把官方离线 release 压缩包加入兜底方案（经验来自 `esp-mosaico/esp-mosaico-vibe`）。
