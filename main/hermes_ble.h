@@ -52,11 +52,11 @@ esp_err_t hermes_ble_send_text(const char *bot_id, const char *text);
 // Send quick action (1=继续, 2=stop)
 esp_err_t hermes_ble_send_quick(const char *bot_id, uint8_t action);
 
-// Start audio recording
+// Start audio recording (VOICE START frame: bot_id + codec)
 esp_err_t hermes_ble_audio_start(const char *bot_id);
 
-// Send Opus audio frame
-esp_err_t hermes_ble_audio_frame(const uint8_t *opus_data, size_t len, uint16_t sequence);
+// Send a PCM16LE mono 16 kHz audio block (split into MTU-sized VOICE DATA frames)
+esp_err_t hermes_ble_audio_frame(const uint8_t *pcm_data, size_t len, uint16_t sequence);
 
 // End audio recording
 esp_err_t hermes_ble_audio_end(void);

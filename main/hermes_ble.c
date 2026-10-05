@@ -8,6 +8,7 @@
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/timers.h"
+#include "host/ble_att.h"
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
 #include "host/util/util.h"
@@ -117,7 +118,7 @@ static const struct ble_gatt_chr_def gatt_chars[] = {
     {
         .uuid = &hermes_voice_uuid.u,
         .access_cb = gatt_access_cb,
-        .flags = BLE_GATT_CHR_F_WRITE,
+        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
         .val_handle = &s_voice_val_handle,
     },
     { 0 },  // End
@@ -263,17 +264,17 @@ static void handle_voice_data(const uint8_t *data, size_t len)
 
     case VOICE_KIND_DATA:
         ESP_LOGD(TAG, "Voice data: %d bytes, seq=%d", (int)payload_len, sequence);
-        // TODO: Buffer audio data for STT
+        // Companion → device audio is future TTS playback — not implemented yet
         break;
 
     case VOICE_KIND_END:
         ESP_LOGI(TAG, "Voice end: token=%lu", (unsigned long)token);
-        // TODO: Process buffered audio → STT
+        // Future TTS playback would stop/flush here
         break;
 
     case VOICE_KIND_CANCEL:
         ESP_LOGI(TAG, "Voice cancel: token=%lu", (unsigned long)token);
-        // TODO: Discard buffered audio
+        // Future TTS playback would discard buffered audio here
         break;
     }
 }
@@ -559,31 +560,117 @@ esp_err_t hermes_ble_send_quick(const char *bot_id, uint8_t action)
     return ble_gattc_notify_custom(s_conn_handle, s_tx_val_handle, om);
 }
 
-esp_err_t hermes_ble_audio_start(const char *bot_id)
+// ── VOICE Upload (device → companion) ─────────────────────────────────────
+//
+// VOICE frame: kind:u8 | token:u32LE | sequence:u16LE | payload
+//   kind=1 START : payload = bot_id:40bytes | codec:u8 (0 = PCM16LE mono 16 kHz), sequence = 0
+//   kind=2 DATA  : payload = PCM16LE audio chunk, sequence = chunk index (from 1, u16 wrap)
+//   kind=3 END   : payload empty
+//   kind=4 CANCEL: payload empty
+// token is a random u32 per recording session, chosen at START.
+// Each frame is sent as one ATT notification; the audio chunk inside a DATA
+// frame is sized to fit the negotiated ATT MTU (see VOICE_FRAME_HEADER_LEN).
+
+#define VOICE_FRAME_HEADER_LEN 7  // kind(1) + token(4) + sequence(2)
+
+static uint32_t s_voice_token = 0;
+static uint16_t s_voice_seq = 0;
+static bool s_voice_active = false;
+
+// Build a VOICE frame header into buf and notify it together with payload.
+// Returns ESP_OK on success, ESP_ERR_INVALID_STATE when not connected,
+// ESP_ERR_NO_MEM when the TX mbuf pool is exhausted (caller counts the drop).
+static esp_err_t voice_send_frame(uint8_t kind, const uint8_t *payload, size_t payload_len)
 {
-    ESP_LOGI(TAG, "Audio start for bot: %s", bot_id);
-    // TODO: Send via VOICE characteristic
-    return ESP_OK;
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+
+    uint8_t hdr[VOICE_FRAME_HEADER_LEN];
+    hdr[0] = kind;
+    hdr[1] = (uint8_t)(s_voice_token);
+    hdr[2] = (uint8_t)(s_voice_token >> 8);
+    hdr[3] = (uint8_t)(s_voice_token >> 16);
+    hdr[4] = (uint8_t)(s_voice_token >> 24);
+    hdr[5] = (uint8_t)(s_voice_seq);
+    hdr[6] = (uint8_t)(s_voice_seq >> 8);
+
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(hdr, sizeof(hdr));
+    if (!om) return ESP_ERR_NO_MEM;
+    if (payload_len > 0) {
+        if (os_mbuf_append(om, payload, (uint16_t)payload_len) != 0) {
+            os_mbuf_free_chain(om);
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    int rc = ble_gattc_notify_custom(s_conn_handle, s_voice_val_handle, om);
+    return (rc == 0) ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t hermes_ble_audio_frame(const uint8_t *opus_data, size_t len, uint16_t sequence)
+esp_err_t hermes_ble_audio_start(const char *bot_id)
 {
-    ESP_LOGD(TAG, "Audio frame: %d bytes, seq=%d", len, sequence);
-    // TODO: Send Opus frame via VOICE characteristic
+    if (s_voice_active) return ESP_ERR_INVALID_STATE;
+
+    s_voice_token = esp_random();
+    s_voice_seq = 0;
+
+    uint8_t payload[41];
+    memset(payload, 0, sizeof(payload));
+    strncpy((char *)payload, bot_id ? bot_id : "", 40);
+    payload[40] = 0;  // codec 0 = PCM16LE mono 16 kHz
+
+    esp_err_t err = voice_send_frame(VOICE_KIND_START, payload, sizeof(payload));
+    if (err == ESP_OK) {
+        s_voice_active = true;
+        ESP_LOGI(TAG, "Audio start: bot=%s token=%08lx", bot_id, (unsigned long)s_voice_token);
+    }
+    return err;
+}
+
+esp_err_t hermes_ble_audio_frame(const uint8_t *pcm_data, size_t len, uint16_t sequence)
+{
+    if (!s_voice_active) return ESP_ERR_INVALID_STATE;
+    (void)sequence;  // wire sequence is managed internally per chunk
+
+    // ATT notification payload ceiling is (MTU - 3); keep VOICE_FRAME_HEADER_LEN
+    // bytes for the frame header and split the PCM block across DATA frames.
+    uint16_t mtu = ble_att_mtu(s_conn_handle);
+    if (mtu < VOICE_FRAME_HEADER_LEN + 4) return ESP_ERR_INVALID_SIZE;
+    size_t max_payload = mtu - 3 - VOICE_FRAME_HEADER_LEN;
+
+    size_t offset = 0;
+    while (offset < len) {
+        size_t chunk = len - offset;
+        if (chunk > max_payload) chunk = max_payload;
+
+        s_voice_seq++;  // DATA sequence counts from 1
+        esp_err_t err = voice_send_frame(VOICE_KIND_DATA, pcm_data + offset, chunk);
+        if (err != ESP_OK) {
+            // Real-time audio: drop the chunk rather than retry forever
+            ESP_LOGW(TAG, "Voice frame drop (seq=%d, err=%s)",
+                     (int)s_voice_seq, esp_err_to_name(err));
+            return err;
+        }
+        offset += chunk;
+    }
     return ESP_OK;
 }
 
 esp_err_t hermes_ble_audio_end(void)
 {
-    ESP_LOGI(TAG, "Audio end");
-    // TODO: Send audio end via VOICE characteristic
-    return ESP_OK;
+    if (!s_voice_active) return ESP_OK;
+    esp_err_t err = voice_send_frame(VOICE_KIND_END, NULL, 0);
+    ESP_LOGI(TAG, "Audio end: token=%08lx frames=%d", (unsigned long)s_voice_token, (int)s_voice_seq);
+    s_voice_active = false;
+    return err;
 }
 
 esp_err_t hermes_ble_audio_cancel(void)
 {
-    ESP_LOGI(TAG, "Audio cancel");
-    return ESP_OK;
+    if (!s_voice_active) return ESP_OK;
+    esp_err_t err = voice_send_frame(VOICE_KIND_CANCEL, NULL, 0);
+    ESP_LOGI(TAG, "Audio cancel: token=%08lx", (unsigned long)s_voice_token);
+    s_voice_active = false;
+    return err;
 }
 
 esp_err_t hermes_ble_open_bot(const char *bot_id)

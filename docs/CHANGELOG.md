@@ -6,6 +6,8 @@
 
 ## Unreleased
 
+- Implemented the BLE VOICE uplink pipeline for voice input: `audio_start` / `audio_frame` / `audio_end` / `audio_cancel` now stream PCM16LE mono 16 kHz audio to the companion as VOICE frames (`kind:u8 | token:u32LE | sequence:u16LE | payload`, kinds start/data/end/cancel, per-session random token, per-chunk sequence), chunked at runtime to fit the negotiated ATT MTU; the VOICE characteristic gained notification support and the capture task now forwards each 40 ms PCM block as it is recorded. Raw PCM is streamed in V1; Opus compression is a planned optimization. Also fixed the recording-to-transcribing UI hint transition and documented the BLE architecture and protocol in a bilingual README pair.
+
 - Added the supplied 80-byte CW2017 profile for the specified 520 mAh cell, including content/update-flag checks, verified writes, the required restart sequence, and bounded SOC-readiness polling.
 
 - Expanded the environment bootstrap document: added Espressif's Git service mirror (`git.espressif.com.cn`) as the preferred mainland-China route for ESP-IDF v5.5.3 and its submodules, documented submodule long-wait/timeout handling, in-place repair, and the pinned-commit shallow fetch for large submodules such as `esp32-wifi-lib`, warned about stale per-repository Jihulab `insteadOf` residue, and added the official offline release archive as a last-resort fallback (learned from `esp-mosaico/esp-mosaico-vibe`).

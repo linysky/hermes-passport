@@ -1,48 +1,52 @@
-# ESP-IDF 安装指南（Windows）
+<p align="right">
+  <strong>English</strong> · <a href="ESP-IDF-INSTALL.zh_CN.md">简体中文</a>
+</p>
 
-## 方法1：官方安装器（推荐）
+# ESP-IDF Installation Guide (Windows)
 
-1. 下载 ESP-IDF v5.5.3 离线安装器：
+## Method 1: Official installer (recommended)
+
+1. Download the ESP-IDF v5.5.3 offline installer:
    https://github.com/espressif/idf-installer/releases/download/offline-5.5.3/esp-idf-tools-setup-offline-5.5.3.exe
-   （约1.6GB）
+   (about 1.6 GB)
 
-2. 运行安装器，选择安装目录（默认 `C:\Users\<user>\Desktop\esp-idf`）
+2. Run the installer and choose the install directory (default `C:\Users\<user>\Desktop\esp-idf`)
 
-3. 安装完成后，桌面会出现 "ESP-IDF 5.5 CMD" 快捷方式
+3. After installation, an "ESP-IDF 5.5 CMD" shortcut appears on the desktop
 
-4. 打开 "ESP-IDF 5.5 CMD"，进入项目目录：
+4. Open "ESP-IDF 5.5 CMD" and enter the project directory:
    ```
    cd C:\Users\linoo\thinkbeer\hermes-passport
    idf.py set-target esp32c3
    idf.py build
    ```
 
-## 方法2：使用已克隆的仓库
+## Method 2: Use a cloned repository
 
-如果已克隆 esp-idf 仓库到 `~/esp/esp-idf-v5.5.3`：
+If the esp-idf repository is already cloned to `~/esp/esp-idf-v5.5.3`:
 
-1. 打开 PowerShell（不是 Git Bash）
-2. 运行：
+1. Open PowerShell (not Git Bash)
+2. Run:
    ```powershell
    cd C:\Users\linoo\esp\esp-idf-v5.5.3
    .\install.ps1 esp32c3
    ```
 
-3. 每次打开新终端需要先 source 环境：
+3. Source the environment in every new terminal:
    ```powershell
    .\export.ps1
    ```
 
-## 编译项目
+## Build the project
 
 ```bash
 cd ~/thinkbeer/hermes-passport
 idf.py set-target esp32c3
 idf.py build
-idf.py -p COM3 flash monitor  # 替换 COM3 为实际串口
+idf.py -p COM3 flash monitor  # replace COM3 with the actual serial port
 ```
 
-## 已知问题
+## Known issues
 
-- Git Bash (MSYS) 不支持 ESP-IDF 工具链，必须用 PowerShell 或 ESP-IDF CMD
-- Python 3.14 可能有兼容性问题，建议用 ESP-IDF 自带的 Python 环境
+- Git Bash (MSYS) does not support the ESP-IDF toolchain; use PowerShell or ESP-IDF CMD instead
+- Python 3.14 may have compatibility issues; prefer the Python environment bundled with ESP-IDF

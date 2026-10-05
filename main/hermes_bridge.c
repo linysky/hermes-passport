@@ -38,7 +38,7 @@ static const char *TAG = "hermes_bridge";
 #define MAX_MSG_TEXT        256
 #define MAX_MESSAGES        20
 #define AUDIO_SAMPLE_RATE   16000
-#define AUDIO_TASK_STACK    4096
+#define AUDIO_TASK_STACK    8192  // BLE send path (mbuf + notify) needs headroom
 #define OPUS_FRAME_SAMPLES  640
 
 // ── UI States ──────────────────────────────────────────────────────────────
@@ -358,7 +358,8 @@ static void rebuild_ui(void) {
             break;
         case STATE_RECORDING:
             lv_label_set_text(s_status_label, s_bots[s_bot_selected].name);
-            lv_label_set_text(s_hint_label, "Recording... OK:stop");
+            lv_label_set_text(s_hint_label,
+                s_recording ? "Recording... OK:stop" : "Transcribing...");
             break;
         case STATE_TRANSCRIBE:
             lv_label_set_text(s_status_label, s_bots[s_bot_selected].name);
@@ -422,9 +423,12 @@ void hermes_bridge_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 if (s_msg_count < MAX_MESSAGES) s_msg_count++;
                 rebuild_chat_ui();
             } else if (btn == BSP_BTN_OK && ev == BSP_BTN_CLICK) {
-                s_recording = true;
                 s_audio_stop = false;
-                hermes_ble_audio_start(s_bots[s_bot_selected].id);
+                if (hermes_ble_audio_start(s_bots[s_bot_selected].id) == ESP_OK) {
+                    s_recording = true;  // only stream after the START frame is out
+                } else {
+                    ESP_LOGW(TAG, "audio start failed (BLE not connected?)");
+                }
                 s_state = STATE_RECORDING;
                 rebuild_ui();
             } else if (btn == BSP_BTN_DOWN && ev == BSP_BTN_LONG) {
@@ -544,12 +548,20 @@ static void audio_task_func(void *arg) {
         }
         s_audio_sequence = 0;
         while (s_recording && !s_audio_stop) {
+            // One blocking read = one 40 ms PCM block (640 samples = 1280 bytes)
             if (bsp_audio_read(pcm_buf, OPUS_FRAME_SAMPLES * sizeof(int16_t)) != ESP_OK) break;
             s_audio_sequence++;
+            // V1 streams raw PCM16 over BLE; Opus compression is a later optimization
+            if (hermes_ble_audio_frame((const uint8_t *)pcm_buf,
+                                       OPUS_FRAME_SAMPLES * sizeof(int16_t),
+                                       s_audio_sequence) != ESP_OK) {
+                ESP_LOGW(TAG, "audio frame send failed (seq=%d)", (int)s_audio_sequence);
+            }
         }
         hermes_ble_audio_end();
         s_recording = false;
         s_audio_stop = false;
+        s_content_dirty = true;  // refresh hint: Recording → Transcribing
     }
     free(pcm_buf);
 }

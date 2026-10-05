@@ -1,102 +1,111 @@
+<p align="right">
+  <strong>English</strong> · <a href="README.zh_CN.md">简体中文</a>
+</p>
+
 # Hermes Passport
 
-Hermes 客户端应用：ESP32-C3 AI Passport 通过 WiFi 连接 Hermes Desktop 插件后端，实现多 bot 聊天、语音交互、流式输出。
+Hermes client firmware for the FoloToy AI Passport (ESP32-C3): the device connects to a Hermes Desktop companion plugin over Bluetooth LE and provides multi-bot chat, voice input, and streaming replies.
 
-## 功能特性
+## Features
 
-- **多 Bot 选择**：🐻 思考熊 / 🐙 八爪鱼 / 🕷️ 织网蛛 / 💬 群聊
-- **语音交互**：录音 → PCM 流式上传 → 后端 STT → 自动发送
-- **流式输出**：WebSocket 实时接收 bot 回复，逐字显示
-- **BLUFI 配网**：通过 ESP Config 手机 App 配置 WiFi
-- **动态 Bot 列表**：从后端动态获取可用 bot
+- **Multi-bot selection**: pick from the bot list served by the companion (individual bots or group chats, whatever the companion registers)
+- **Voice input**: record → PCM16 streamed over BLE → companion runs STT → transcribed text shown for confirmation → send
+- **Streaming output**: bot replies arrive over BLE and render live on screen
+- **BLE pairing**: the companion connects to the device's GATT service; pairing info is stored in NVS for auto-reconnect
+- **Dynamic bot list**: fetched from the companion at connect time, never hardcoded
 
-## 架构
+## Architecture
 
 ```
-AI Passport (ESP32-C3)          Hermes Desktop Plugin (:9527)
-        │                                │
-   LVGL UI + 按键                    HTTP Server
-   WiFi + HTTP Client                WebSocket Server
-   ES8311 音频                       Bot Registry
-        │                                │
-        └──── WiFi ────────────────────► Gateway
+AI Passport (ESP32-C3)             Hermes Desktop Plugin (Companion)
+        │                                   │
+   LVGL UI + buttons                  BLE central
+   NimBLE GATT server                 Gateway JSON-RPC client
+   ES8311 audio (PCM16 capture)       STT bridge + bot registry
+        │                                   │
+        └──────── Bluetooth LE ─────────────┤
                                             │
                                      Hermes Gateway
-                                     (各 Profile)
+                                     (profiles)
 ```
 
-## 硬件
+- Device = BLE peripheral / GATT server, advertises as `Hermes-Passport`
+- Companion = BLE central, bridges the device to Hermes Gateway profiles
 
-- **MCU**：ESP32-C3, 8MB Flash, 无 PSRAM
-- **显示屏**：240×320 ST7789
-- **按键**：3 个 (UP/DOWN/OK，ADC 电阻梯形)
-- **音频**：ES8311 (I2S 全双工)
-- **WiFi**：2.4GHz
+## Hardware
 
-## 按键定义
+- **MCU**: ESP32-C3, 8 MB Flash, no PSRAM
+- **Display**: 240×320 ST7789
+- **Buttons**: 3 (UP/DOWN/OK, ADC resistor ladder)
+- **Audio**: ES8311 (I2S full duplex)
+- **WiFi**: 2.4 GHz (not used in BLE mode)
 
-| 按键 | 短按 | 长按 |
-|------|------|------|
-| UP   | 发送 "继续" | 进入滚动模式 |
-| DOWN | 发送 "/stop" | 返回 Bot 列表 |
-| OK   | 开始/停止录音 | 确认选择 |
+## Buttons
 
-## 开发环境
+| Button | Short press | Long press |
+|--------|-------------|------------|
+| UP | Send "continue" | Enter scroll mode |
+| DOWN | Send "/stop" | Back to bot list |
+| OK | Start/stop recording | Confirm selection |
 
-### 安装 ESP-IDF
+## BLE Protocol
 
-1. 下载 ESP-IDF v5.5.3 离线安装器：
-   https://github.com/espressif/idf-installer/releases/download/offline-5.5.3/esp-idf-tools-setup-offline-5.5.3.exe
+Service `48450001-51c4-499d-a186-4621a4938301` (advertised as `Hermes-Passport`):
 
-2. 运行安装器，安装到默认目录
+| Characteristic | UUID | Direction | Purpose |
+|---|---|---|---|
+| RX (write) | `…8302` | Companion → device | Control messages: bot list, stream chunks, STT result |
+| TX (notify) | `…8303` | Device → Companion | Control messages: send text, quick actions, open bot |
+| VOICE (write/notify) | `…8304` | Device → Companion | PCM16 audio frames for STT |
 
-3. 打开 "ESP-IDF 5.5 CMD"，进入项目目录
+Message format: `version:u8 | type:u8 | payload`.
+VOICE frames: `kind:u8 | token:u32LE | sequence:u16LE | payload` — kind 1=start, 2=data, 3=end, 4=cancel.
 
-### 编译固件
+## Development
+
+### Prerequisites
+
+ESP-IDF v5.5.3 — installation details in [docs/ESP-IDF-INSTALL.md](docs/ESP-IDF-INSTALL.md).
+
+### Build
 
 ```bash
 cd hermes-passport
 idf.py set-target esp32c3
 idf.py build
-idf.py -p COM3 flash monitor
+idf.py -p COM3 flash monitor   # replace COM3 with the actual port
 ```
 
-## 项目结构
+### Validation
+
+```bash
+./tools/validate.sh --static    # repository checks + host tests
+./tools/validate.sh --firmware  # ESP-IDF build + merged-image verification
+./tools/validate.sh             # complete gate
+```
+
+## Project Structure
 
 ```
 hermes-passport/
 ├── main/
-│   ├── hermes_bridge.c      ← 主程序
-│   ├── hermes_bridge.h
-│   ├── hermes_wifi_prov.c   ← BLUFI 配网
-│   ├── hermes_wifi_prov.h
-│   ├── main.c               ← 菜单入口
-│   └── CMakeLists.txt
-├── components/bsp/          ← BSP 驱动
-├── docs/
-│   ├── TECHNICAL_DESIGN.md  ← 技术设计
-│   ├── UI-UX.md             ← UI/UX 设计
-│   └── ESP-IDF-INSTALL.md   ← 安装指南
-└── README.md
+│   ├── main.c               ← demo menu entry
+│   ├── hermes_bridge.c/.h   ← Hermes page: LVGL UI + state machine
+│   ├── hermes_ble.c/.h      ← NimBLE GATT server + protocol
+│   └── ui_pixel.c/.h        ← pixel UI helpers
+├── components/bsp/          ← board support (display, audio, buttons, ...)
+├── docs/                    ← development, hardware, and contribution docs
+├── tools/                   ← validation scripts
+└── tests/                   ← host tests
 ```
 
-## Desktop 插件
+## Companion Plugin
 
-插件文件位于：
-- 前端：`~/.hermes/desktop-plugins/hermes-bridge/plugin.js`
-- 后端：`~/.hermes/plugins/hermes-bridge/dashboard/plugin_api.py`
+The companion runs on the desktop as a Hermes plugin:
 
-### 插件 API
+- Frontend: `~/.hermes/desktop-plugins/hermes-bridge/plugin.js`
+- Backend: `~/.hermes/plugins/hermes-bridge/dashboard/plugin_api.py`
 
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/api/health` | GET | 健康检查 |
-| `/api/bots` | GET | 获取 Bot 列表 |
-| `/api/chat` | POST | 发送消息 |
-| `/api/audio/start` | POST | 开始录音 |
-| `/api/audio/chunk` | POST | 发送音频块 |
-| `/api/audio/end` | POST | 结束录音 |
-
-## 许可证
+## License
 
 MIT License
