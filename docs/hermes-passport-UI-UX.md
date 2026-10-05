@@ -369,6 +369,6 @@ All gated by the Hint-sounds setting. Silent mode still shows the visual indicat
 
 ## 10. Open questions for review
 
-1. **Which screen is the default?** HOME showing the mascot, or the most recent summary straight away? (Current design: show the summary, fall back to the mascot after 20 s idle.)
+1. **Which screen is the default?** — **DECIDED**: HOME shows the most recent summary. The mascot appears only when there is nothing to show yet (first boot, or after a new session), and a summary falls back to the mascot after 20 s idle.
 2. **Speak replies on by default?** (ai-passport-hermes defaults to on, 200-character cap.)
 3. **Should the device start a new session?** (Current design: long-press OK for 2 s, which runs the Hermes `/new` confirmation flow.)

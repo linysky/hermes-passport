@@ -35,6 +35,8 @@ run_static_checks() {
         "tests/test_ui_pixel_math.c:main/ui_pixel_math.c"
         "tests/test_text_layout.c:main/text_layout.c"
         "tests/test_history_ring.c:main/history_ring.c main/text_layout.c"
+        "tests/test_buddy_state.c:main/buddy_state.c"
+        "tests/test_summary_extract.c:main/summary_extract.c main/text_layout.c"
     )
     for entry in "${host_tests[@]}"; do
         src="${entry%%:*}"
